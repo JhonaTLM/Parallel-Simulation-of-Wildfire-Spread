@@ -87,6 +87,29 @@ __global__ void init_curand_kernel(curandState *states, unsigned long long seed,
 }
 
 // =============================
+// KERNEL: REINICIAR TERRENO EN GPU
+// =============================
+
+__global__ void reiniciar_terreno_kernel(int *estado, int total, int inicio_idx) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+    estado[idx] = (idx == inicio_idx) ? FUEGO : SANO;
+}
+
+// =============================
+// KERNEL: CONTAR CELDAS QUEMADAS (incluye FUEGO del último paso)
+// =============================
+
+__global__ void contar_quemados_kernel(int *estado, int *contador, int total) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) return;
+    // Contar QUEMADO y FUEGO (las celdas en fuego al final también se quemaron)
+    if (estado[idx] == QUEMADO || estado[idx] == FUEGO) {
+        atomicAdd(&contador[idx], 1);
+    }
+}
+
+// =============================
 // KERNEL: UN PASO DE PROPAGACIÓN
 // =============================
 
@@ -108,29 +131,29 @@ __global__ void simular_kernel(
         nuevo[idx] = QUEMADO;
 
     } else if (estado[idx] == SANO) {
-        // Revisar si algún vecino está en fuego
-        int di[4] = {-1, 1, 0, 0};
-        int dj[4] = {0, 0, -1, 1};
-        bool vecino_fuego = false;
+        // Revisar CADA vecino en fuego (Vecindad de Moore - 8 vecinos)
+        // Cada vecino en fuego tiene una oportunidad INDEPENDIENTE de propagar
+        int di[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+        int dj[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+        
+        bool se_enciende = false;
 
-        for (int d = 0; d < 4; d++) {
+        for (int d = 0; d < 8; d++) {
             int ni = i + di[d];
             int nj = j + dj[d];
             if (ni >= 0 && ni < filas && nj >= 0 && nj < columnas) {
                 if (estado[ni * columnas + nj] == FUEGO) {
-                    vecino_fuego = true;
-                    break;
+                    // Cada vecino en fuego tiene su propia oportunidad
+                    float r = curand_uniform(&states[idx]);
+                    if (r < prob) {
+                        se_enciende = true;
+                        break;  // Ya se encendió, no necesita más intentos
+                    }
                 }
             }
         }
 
-        if (vecino_fuego) {
-            // Generar número aleatorio con CURAND
-            float r = curand_uniform(&states[idx]);
-            nuevo[idx] = (r < prob) ? FUEGO : SANO;
-        } else {
-            nuevo[idx] = SANO;
-        }
+        nuevo[idx] = se_enciende ? FUEGO : SANO;
 
     } else {
         // Celda quemada permanece quemada
@@ -139,7 +162,7 @@ __global__ void simular_kernel(
 }
 
 // =============================
-// SIMULACIÓN MONTE CARLO CUDA
+// SIMULACIÓN MONTE CARLO CUDA (OPTIMIZADA)
 // =============================
 
 float** montecarlo_incendios(
@@ -159,62 +182,49 @@ float** montecarlo_incendios(
     int filas    = terreno_inicial->filas;
     int columnas = terreno_inicial->columnas;
     int total    = filas * columnas;
+    int inicio_idx = inicio_x * columnas + inicio_y;
 
-    // Matriz de contadores
-    float **contador = (float**)malloc(filas * sizeof(float*));
-    for (int i = 0; i < filas; i++)
-        contador[i] = (float*)calloc(columnas, sizeof(float));
-
-    // Memoria en GPU
+    // Memoria en GPU para estados
     int *d_estado, *d_nuevo;
     cudaMalloc(&d_estado, total * sizeof(int));
     cudaMalloc(&d_nuevo,  total * sizeof(int));
 
+    // Guardar punteros originales para liberar correctamente
+    int *d_estado_original = d_estado;
+    int *d_nuevo_original = d_nuevo;
+
+    // Contador en GPU (evita transferencias constantes)
+    int *d_contador;
+    cudaMalloc(&d_contador, total * sizeof(int));
+    cudaMemset(d_contador, 0, total * sizeof(int));
+
+    // Estados CURAND
     curandState *d_states;
     cudaMalloc(&d_states, total * sizeof(curandState));
 
     int blocks = (total + threads - 1) / threads;
 
+    // Factor global (calculado UNA sola vez)
+    float factorGlobal = f_viento * f_vegetacion * f_humedad * f_temperatura * f_pendiente;
+    float prob = probBase * factorGlobal;
+    if (prob > 1.0f) prob = 1.0f;  // Clamping estándar
+
+    // ✅ OPTIMIZACIÓN: Inicializar CURAND UNA SOLA VEZ
+    unsigned long long base_seed = (unsigned long long)time(NULL) * 1099511628211ULL;
+    init_curand_kernel<<<blocks, threads>>>(d_states, base_seed, total);
+    cudaDeviceSynchronize();
+
     for (int sim = 0; sim < N_simulaciones; sim++) {
 
-        // Reiniciar terreno
-        for (int k = 0; k < total; k++)
-            terreno_inicial->estado[k] = SANO;
-
-        // Punto de inicio fijo del fuego (definido por el usuario)
-        terreno_inicial->estado[inicio_x * columnas + inicio_y] = FUEGO;
-
-        // Factor global basado en parámetros del usuario con pequeña variación aleatoria
-        float var1 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var2 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var3 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var4 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var5 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-
-        float factorGlobal = 
-            f_viento * var1 *
-            f_vegetacion * var2 *
-            f_humedad * var3 *
-            f_temperatura * var4 *
-            f_pendiente * var5;
-
-        float prob = probBase * factorGlobal;
-        if (prob > 1.0f) prob = 1.0f;
-
-        // Copiar estado inicial a GPU
-        cudaMemcpy(d_estado, terreno_inicial->estado, total * sizeof(int), cudaMemcpyHostToDevice);
-
-        // Inicializar CURAND con semilla diferente por simulación
-        unsigned long long seed = (unsigned long long)time(NULL) ^
-                                  ((unsigned long long)sim * 6364136223846793005ULL);
-        init_curand_kernel<<<blocks, threads>>>(d_states, seed, total);
+        // ✅ OPTIMIZACIÓN: Reiniciar terreno en GPU (no en CPU)
+        reiniciar_terreno_kernel<<<blocks, threads>>>(d_estado, total, inicio_idx);
         cudaDeviceSynchronize();
 
         // Propagación temporal
         for (int t = 0; t < T_max; t++) {
-            cudaMemcpy(d_nuevo, d_estado, total * sizeof(int), cudaMemcpyDeviceToDevice);
+            // Ejecutar kernel de propagación (lee d_estado, escribe d_nuevo)
             simular_kernel<<<blocks, threads>>>(d_estado, d_nuevo, filas, columnas, prob, d_states);
-            cudaDeviceSynchronize();
+            cudaDeviceSynchronize();  // ✅ Sincronizar antes de intercambiar
 
             // Intercambiar punteros
             int *tmp = d_estado;
@@ -222,30 +232,34 @@ float** montecarlo_incendios(
             d_nuevo  = tmp;
         }
 
-        // Copiar resultado final a host
-        int *h_final = (int*)malloc(total * sizeof(int));
-        cudaMemcpy(h_final, d_estado, total * sizeof(int), cudaMemcpyDeviceToHost);
-
-        // Contar celdas quemadas
-        for (int i = 0; i < filas; i++)
-            for (int j = 0; j < columnas; j++)
-                if (h_final[i * columnas + j] == QUEMADO)
-                    contador[i][j]++;
-
-        free(h_final);
+        // ✅ Contar en GPU con atomicAdd
+        contar_quemados_kernel<<<blocks, threads>>>(d_estado, d_contador, total);
     }
 
-    // Liberar memoria GPU
-    cudaFree(d_estado);
-    cudaFree(d_nuevo);
-    cudaFree(d_states);
+    // ✅ Sincronizar solo al final de todas las simulaciones
+    cudaDeviceSynchronize();
+
+    // Copiar contadores a CPU (UNA sola vez)
+    int *h_contador = (int*)malloc(total * sizeof(int));
+    cudaMemcpy(h_contador, d_contador, total * sizeof(int), cudaMemcpyDeviceToHost);
 
     // Calcular probabilidades
-    for (int i = 0; i < filas; i++)
-        for (int j = 0; j < columnas; j++)
-            contador[i][j] /= N_simulaciones;
+    float **resultado = (float**)malloc(filas * sizeof(float*));
+    for (int i = 0; i < filas; i++) {
+        resultado[i] = (float*)malloc(columnas * sizeof(float));
+        for (int j = 0; j < columnas; j++) {
+            resultado[i][j] = (float)h_contador[i * columnas + j] / N_simulaciones;
+        }
+    }
 
-    return contador;
+    // Liberar memoria (usar punteros originales)
+    free(h_contador);
+    cudaFree(d_estado_original);
+    cudaFree(d_nuevo_original);
+    cudaFree(d_states);
+    cudaFree(d_contador);
+
+    return resultado;
 }
 
 // =============================
@@ -287,15 +301,24 @@ int main(int argc, char* argv[]) {
 
     Terreno *terreno = crear_terreno(filas, columnas);
 
-    clock_t inicio = clock();
+    // Usar cudaEvent para medir tiempo con precisión en GPU
+    cudaEvent_t cuda_inicio, cuda_fin;
+    cudaEventCreate(&cuda_inicio);
+    cudaEventCreate(&cuda_fin);
+    cudaEventRecord(cuda_inicio);
 
     float **probabilidades = montecarlo_incendios(
         terreno, N_simulaciones, T_max, probBase, threads, inicio_x, inicio_y,
         f_viento, f_vegetacion, f_humedad, f_temperatura, f_pendiente
     );
 
-    clock_t fin = clock();
-    double tiempo_total = (double)(fin - inicio) / CLOCKS_PER_SEC;
+    cudaEventRecord(cuda_fin);
+    cudaEventSynchronize(cuda_fin);
+    float tiempo_ms = 0.0f;
+    cudaEventElapsedTime(&tiempo_ms, cuda_inicio, cuda_fin);
+    double tiempo_total = tiempo_ms / 1000.0;  // Convertir a segundos
+    cudaEventDestroy(cuda_inicio);
+    cudaEventDestroy(cuda_fin);
 
     // ===================== IMPRIMIR MATRIZ CSV A STDOUT =====================
     for (int i = 0; i < filas; i++) {

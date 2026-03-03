@@ -108,12 +108,12 @@ __global__ void simular_kernel(
         nuevo[idx] = QUEMADO;
 
     } else if (estado[idx] == SANO) {
-        // Revisar si algún vecino está en fuego
-        int di[4] = {-1, 1, 0, 0};
-        int dj[4] = {0, 0, -1, 1};
+        // Revisar si algún vecino está en fuego (Vecindad de Moore - 8 vecinos)
+        int di[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+        int dj[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
         bool vecino_fuego = false;
 
-        for (int d = 0; d < 4; d++) {
+        for (int d = 0; d < 8; d++) {
             int ni = i + di[d];
             int nj = j + dj[d];
             if (ni >= 0 && ni < filas && nj >= 0 && nj < columnas) {
@@ -175,6 +175,9 @@ float** montecarlo_incendios(
 
     int blocks = (total + threads - 1) / threads;
 
+    // Semilla base calculada una vez para evitar repeticiones con time(NULL)
+    unsigned long long base_seed = (unsigned long long)time(NULL) * 1099511628211ULL;
+
     for (int sim = 0; sim < N_simulaciones; sim++) {
 
         // Reiniciar terreno
@@ -184,29 +187,17 @@ float** montecarlo_incendios(
         // Punto de inicio fijo del fuego (definido por el usuario)
         terreno_inicial->estado[inicio_x * columnas + inicio_y] = FUEGO;
 
-        // Factor global basado en parámetros del usuario con pequeña variación aleatoria
-        float var1 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var2 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var3 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var4 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-        float var5 = 0.95f + ((float)rand() / RAND_MAX) * 0.1f;
-
-        float factorGlobal = 
-            f_viento * var1 *
-            f_vegetacion * var2 *
-            f_humedad * var3 *
-            f_temperatura * var4 *
-            f_pendiente * var5;
+        // Factor global basado en parámetros del usuario
+        float factorGlobal = f_viento * f_vegetacion * f_humedad * f_temperatura * f_pendiente;
 
         float prob = probBase * factorGlobal;
-        if (prob > 1.0f) prob = 1.0f;
 
         // Copiar estado inicial a GPU
         cudaMemcpy(d_estado, terreno_inicial->estado, total * sizeof(int), cudaMemcpyHostToDevice);
 
-        // Inicializar CURAND con semilla diferente por simulación
-        unsigned long long seed = (unsigned long long)time(NULL) ^
-                                  ((unsigned long long)sim * 6364136223846793005ULL);
+        // Inicializar CURAND con semilla única por simulación
+        // Usamos base_seed (calculado una vez al inicio) combinado con sim
+        unsigned long long seed = base_seed ^ ((unsigned long long)sim * 6364136223846793005ULL + sim);
         init_curand_kernel<<<blocks, threads>>>(d_states, seed, total);
         cudaDeviceSynchronize();
 
@@ -287,15 +278,24 @@ int main(int argc, char* argv[]) {
 
     Terreno *terreno = crear_terreno(filas, columnas);
 
-    clock_t inicio = clock();
+    // Usar cudaEvent para medir tiempo con precisión en GPU
+    cudaEvent_t cuda_inicio, cuda_fin;
+    cudaEventCreate(&cuda_inicio);
+    cudaEventCreate(&cuda_fin);
+    cudaEventRecord(cuda_inicio);
 
     float **probabilidades = montecarlo_incendios(
         terreno, N_simulaciones, T_max, probBase, threads, inicio_x, inicio_y,
         f_viento, f_vegetacion, f_humedad, f_temperatura, f_pendiente
     );
 
-    clock_t fin = clock();
-    double tiempo_total = (double)(fin - inicio) / CLOCKS_PER_SEC;
+    cudaEventRecord(cuda_fin);
+    cudaEventSynchronize(cuda_fin);
+    float tiempo_ms = 0.0f;
+    cudaEventElapsedTime(&tiempo_ms, cuda_inicio, cuda_fin);
+    double tiempo_total = tiempo_ms / 1000.0;  // Convertir a segundos
+    cudaEventDestroy(cuda_inicio);
+    cudaEventDestroy(cuda_fin);
 
     // ===================== IMPRIMIR MATRIZ CSV A STDOUT =====================
     for (int i = 0; i < filas; i++) {
