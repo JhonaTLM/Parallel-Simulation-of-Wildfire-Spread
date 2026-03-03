@@ -20,9 +20,14 @@ int main(int argc, char* argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    if (argc < 6) {
+    // Esperamos 13 parámetros + nombre programa = 14
+    if (argc < 14) {
         if (rank == 0)
-            cout << "Uso: ./mpi filas columnas simulaciones T_MAX probBase\n";
+            cout << "Uso:\n"
+                 << "./mpi_fuego filas columnas simulaciones T_MAX probBase "
+                 << "inicio_x inicio_y "
+                 << "f_viento f_vegetacion f_humedad f_temperatura f_pendiente "
+                 << "viento_dir\n";
         MPI_Finalize();
         return 0;
     }
@@ -32,6 +37,17 @@ int main(int argc, char* argv[]) {
     int simulaciones = atoi(argv[3]);
     int T_MAX = atoi(argv[4]);
     double probBase = atof(argv[5]);
+
+    int inicio_x = atoi(argv[6]);
+    int inicio_y = atoi(argv[7]);
+
+    double f_viento = atof(argv[8]);
+    double f_vegetacion = atof(argv[9]);
+    double f_humedad = atof(argv[10]);
+    double f_temperatura = atof(argv[11]);
+    double f_pendiente = atof(argv[12]);
+
+    int viento_dir = atoi(argv[13]); // 0=N,1=NE,2=E,3=SE,4=S,5=SW,6=W,7=NW
 
     int sim_local = simulaciones / size;
     if (rank == size - 1)
@@ -45,13 +61,12 @@ int main(int argc, char* argv[]) {
 
     for (int s = 0; s < sim_local; s++) {
 
-        vector<int> estado(filas * columnas, 0);
+        vector<int> estado(filas * columnas, SANO);
 
-        int fi = rand() % filas;
-        int co = rand() % columnas;
-        estado[fi * columnas + co] = FUEGO;
+        // Punto inicial fijo desde Streamlit
+        estado[inicio_x * columnas + inicio_y] = FUEGO;
 
-        double factor = 0.7 + (double)rand() / RAND_MAX * (1.3 - 0.7);
+        double factor_random = 0.7 + (double)rand() / RAND_MAX * (1.3 - 0.7);
 
         for (int t = 0; t < T_MAX; t++) {
 
@@ -66,11 +81,19 @@ int main(int argc, char* argv[]) {
 
                         nuevo[idx] = QUEMADO;
 
-                        int vecinos[4][2] = {
-                            {i-1,j},{i+1,j},{i,j-1},{i,j+1}
+                        // 8 vecinos (N, NE, E, SE, S, SW, W, NW)
+                        int vecinos[8][2] = {
+                            {i-1,j},     // N  (0)
+                            {i-1,j+1},   // NE (1)
+                            {i,j+1},     // E  (2)
+                            {i+1,j+1},   // SE (3)
+                            {i+1,j},     // S  (4)
+                            {i+1,j-1},   // SW (5)
+                            {i,j-1},     // W  (6)
+                            {i-1,j-1}    // NW (7)
                         };
 
-                        for (int v = 0; v < 4; v++) {
+                        for (int v = 0; v < 8; v++) {
 
                             int ni = vecinos[v][0];
                             int nj = vecinos[v][1];
@@ -81,7 +104,19 @@ int main(int argc, char* argv[]) {
 
                                 if (estado[nidx] == SANO) {
 
-                                    double p = probBase * factor;
+                                    double p = probBase *
+                                               f_viento *
+                                               f_vegetacion *
+                                               f_humedad *
+                                               f_temperatura *
+                                               f_pendiente *
+                                               factor_random;
+
+                                    // Si coincide dirección del viento → aumentar probabilidad
+                                    if (v == viento_dir) {
+                                        p *= 1.25;  // +25%
+                                    }
+
                                     if (p > 1.0) p = 1.0;
 
                                     double r = (double)rand() / RAND_MAX;
@@ -126,7 +161,6 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < filas * columnas; i++)
             prob[i] = contador_global[i] / simulaciones;
 
-        // Crear carpeta resultados
         system("mkdir -p resultados");
 
         ofstream archivo("resultados/mpi.csv");
