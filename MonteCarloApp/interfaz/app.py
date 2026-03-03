@@ -39,6 +39,22 @@ metodo = st.sidebar.selectbox(
     ["Secuencial C++", "OpenMP C++", "CUDA", "MPI"]
 )
 
+# ===================== CONFIGURACION MPI =====================
+if metodo == "MPI":
+    st.sidebar.header("Configuración MPI Cluster")
+
+    hosts_input = st.sidebar.text_input(
+        "Hosts (separados por coma)",
+        value="master,client1,client2"
+    )
+
+    num_procesos = st.sidebar.number_input(
+        "Número de procesos MPI",
+        min_value=1,
+        max_value=64,
+        value=3
+    )
+
 # ===================== RUTAS =====================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIM_DIR = os.path.join(BASE_DIR, "simulaciones")
@@ -84,12 +100,33 @@ def ejecutar_simulacion():
             return None, None, None, None, None
         comando = [exe, str(filas), str(columnas), str(simulaciones), str(tmax), str(prob), str(inicio_x), str(inicio_y), str(f_viento), str(f_vegetacion), str(f_humedad), str(f_temperatura), str(f_pendiente)]
     else:
-        script = os.path.join(SIM_DIR, "mpi_python.py")
-        if not os.path.exists(script):
-            st.error(f"Script MPI Python no encontrado en {script}")
-            return None, None, None, None, None
-        comando = ["python", script, str(filas), str(columnas), str(simulaciones), str(tmax), str(prob)]
+        exe = os.path.join(SIM_DIR, "mpi_fuego") 
 
+        if not os.path.exists(exe):
+            st.error(f"Ejecutable MPI no encontrado en {exe}")
+            return None, None, None, None, None
+
+        host_list = [h.strip() for h in hosts_input.split(",") if h.strip()]
+
+        hostfile_path = os.path.join(SIM_DIR, "hosts_streamlit")
+
+        with open(hostfile_path, "w") as f:
+            for h in host_list:
+                f.write(h + "\n")
+
+        comando = [
+            "mpirun",
+            "-mca", "plm_rsh_no_tree_spawn", "1",
+            "-hostfile", hostfile_path,
+            "-np", str(num_procesos),
+            exe,
+            str(filas), str(columnas), str(simulaciones),
+            str(tmax), str(prob),
+            str(inicio_x), str(inicio_y),
+            str(f_viento), str(f_vegetacion),
+            str(f_humedad), str(f_temperatura),
+            str(f_pendiente)
+        ]
     inicio = time.time()
     proceso = subprocess.run(comando, capture_output=True, text=True)
     tiempo = time.time() - inicio
