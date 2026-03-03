@@ -140,7 +140,8 @@ def ejecutar_simulacion():
             str(inicio_x), str(inicio_y),
             str(f_viento), str(f_vegetacion),
             str(f_humedad), str(f_temperatura),
-            str(f_pendiente)
+            str(f_pendiente),
+            str(viento_dir) 
         ]
     inicio = time.time()
     proceso = subprocess.run(comando, capture_output=True, text=True)
