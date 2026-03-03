@@ -20,19 +20,30 @@ filas = st.sidebar.number_input("Filas del terreno", 10, 500, 50)
 columnas = st.sidebar.number_input("Columnas del terreno", 10, 500, 50)
 simulaciones = st.sidebar.number_input("Número de simulaciones", 10, 100000, 500)
 tmax = st.sidebar.number_input("Tiempo máximo de propagación (TMAX)", 1, 500, 50)
-prob = st.sidebar.slider("Probabilidad base de propagación", 0.0, 1.0, 0.3)
+prob = st.sidebar.slider("Probabilidad base de propagación", 0.0, 0.5, 0.3)
 
 st.sidebar.header("Punto de inicio del fuego")
 inicio_x = st.sidebar.number_input("Fila de inicio (X)", 0, int(filas - 1), int(filas // 2))
 inicio_y = st.sidebar.number_input("Columna de inicio (Y)", 0, int(columnas - 1), int(columnas // 2))
 
 st.sidebar.header("Factores ambientales")
-st.sidebar.caption("Valores > 1.0 aumentan propagación, < 1.0 la reducen")
-f_viento = st.sidebar.slider("Factor Viento", 0.5, 2.0, 1.0, 0.1)
-f_vegetacion = st.sidebar.slider("Factor Vegetación", 0.5, 2.0, 1.0, 0.1)
-f_humedad = st.sidebar.slider("Factor Humedad", 0.5, 1.5, 1.0, 0.1)
-f_temperatura = st.sidebar.slider("Factor Temperatura", 0.5, 2.0, 1.0, 0.1)
-f_pendiente = st.sidebar.slider("Factor Pendiente", 0.5, 1.5, 1.0, 0.1)
+st.sidebar.caption("1.0 = neutral | < 1.0 reduce propagación | > 1.0 acelera")
+
+f_viento = st.sidebar.slider("Factor Viento", 0.85, 1.15, 1.0, 0.01)
+f_vegetacion = st.sidebar.slider("Factor Vegetación", 0.85, 1.15, 1.0, 0.01)
+f_humedad_slider = st.sidebar.slider("Humedad ambiental", 0.85, 1.15, 1.0, 0.01,
+    help="Mayor valor = más humedad = menor propagación")
+f_temperatura = st.sidebar.slider("Factor Temperatura", 0.85, 1.15, 1.0, 0.01)
+f_pendiente = st.sidebar.slider("Factor Pendiente", 0.85, 1.15, 1.0, 0.01)
+
+# Invertir humedad: slider alto = menos propagación
+f_humedad = 1.0 / f_humedad_slider
+
+# Calcular y mostrar probabilidad efectiva
+prob_efectiva = prob * f_viento * f_vegetacion * f_humedad * f_temperatura * f_pendiente
+prob_efectiva = min(1.0, max(0.0, prob_efectiva))
+st.sidebar.divider()
+st.sidebar.metric("Probabilidad efectiva", f"{prob_efectiva:.4f}")
 
 metodo = st.sidebar.selectbox(
     "Método de cómputo",
@@ -77,7 +88,6 @@ def parse_line(line: str):
 
 
 def parsear_info_cuda(stderr_text: str) -> dict:
-    """Lee las líneas clave:valor que cuda.exe emite por stderr."""
     info = {}
     for linea in stderr_text.splitlines():
         linea = linea.strip()
@@ -197,7 +207,7 @@ if st.button("Ejecutar simulación"):
         # ── Mapa de calor ───────────────────────────────────────────────
         st.subheader("Mapa de probabilidad de incendio")
         data = df_actual.values.astype(float)
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(5, 4))
         im = ax.imshow(data, cmap="inferno", origin="lower", aspect="auto", vmin=0, vmax=1)
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("Probabilidad de incendio")
@@ -205,7 +215,11 @@ if st.button("Ejecutar simulación"):
         ax.set_xlabel("Columnas")
         ax.set_ylabel("Filas")
         plt.tight_layout()
-        st.pyplot(fig)
+        
+        # Centrar y limitar ancho del gráfico
+        col_izq, col_centro, col_der = st.columns([1, 2, 1])
+        with col_centro:
+            st.pyplot(fig, use_container_width=False)
 
         # ── Descargas ───────────────────────────────────────────────────
         archivo_prob = os.path.join(RESULT_DIR, f"{metodo.replace(' ','_')}_probabilidades.xlsx")

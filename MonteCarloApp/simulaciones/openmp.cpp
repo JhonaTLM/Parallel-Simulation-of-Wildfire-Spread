@@ -62,11 +62,6 @@ int main(int argc, char* argv[]) {
         mt19937 gen(rd() + omp_get_thread_num());
 
         uniform_real_distribution<> dist01(0.0, 1.0);
-        // Rango de variación aleatoria adicional (pequeña) sobre los factores del usuario
-        uniform_real_distribution<> variacion(0.95, 1.05);
-
-        uniform_int_distribution<> distFila(0, filas - 1);
-        uniform_int_distribution<> distCol(0, columnas - 1);
 
         // Contador local para evitar condiciones de carrera
         vector<vector<int>> contador_local(filas, vector<int>(columnas, 0));
@@ -80,13 +75,8 @@ int main(int argc, char* argv[]) {
             // Punto de inicio fijo del fuego (definido por el usuario)
             estado[inicio_x][inicio_y] = FUEGO;
 
-            // Factor global basado en parámetros del usuario con pequeña variación aleatoria
-            double factorGlobal =
-                f_viento * variacion(gen) *
-                f_vegetacion * variacion(gen) *
-                f_humedad * variacion(gen) *
-                f_temperatura * variacion(gen) *
-                f_pendiente * variacion(gen);
+            // Factor global basado en parámetros del usuario
+            double factorGlobal = f_viento * f_vegetacion * f_humedad * f_temperatura * f_pendiente;
 
             // Propagación temporal
             for (int t = 0; t < T_MAX; t++) {
@@ -100,7 +90,7 @@ int main(int argc, char* argv[]) {
 
                             nuevoEstado[i][j] = QUEMADO;
 
-                            // Intentar propagar a 4 vecinos
+                            // Intentar propagar a 8 vecinos (Moore)
                             auto intentar = [&](int ni, int nj) {
                                 if (ni >= 0 && ni < filas &&
                                     nj >= 0 && nj < columnas &&
@@ -114,10 +104,15 @@ int main(int argc, char* argv[]) {
                                 }
                             };
 
-                            intentar(i - 1, j);  // arriba
-                            intentar(i + 1, j);  // abajo
-                            intentar(i, j - 1);  // izquierda
-                            intentar(i, j + 1);  // derecha
+                            // Vecindad de Moore (8 vecinos)
+                            intentar(i - 1, j);      // arriba
+                            intentar(i + 1, j);      // abajo
+                            intentar(i, j - 1);      // izquierda
+                            intentar(i, j + 1);      // derecha
+                            intentar(i - 1, j - 1);  // diagonal superior izquierda
+                            intentar(i - 1, j + 1);  // diagonal superior derecha
+                            intentar(i + 1, j - 1);  // diagonal inferior izquierda
+                            intentar(i + 1, j + 1);  // diagonal inferior derecha
                         }
                     }
                 }
@@ -125,10 +120,10 @@ int main(int argc, char* argv[]) {
                 estado = nuevoEstado;
             }
 
-            // Contar celdas quemadas
+            // Contar celdas quemadas (incluye FUEGO del último paso)
             for (int i = 0; i < filas; i++)
                 for (int j = 0; j < columnas; j++)
-                    if (estado[i][j] == QUEMADO)
+                    if (estado[i][j] == QUEMADO || estado[i][j] == FUEGO)
                         contador_local[i][j]++;
         }
 
