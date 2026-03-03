@@ -1,7 +1,3 @@
-// =============================================================================
-// SIMULACIÓN MONTE CARLO - PROPAGACIÓN DE INCENDIOS FORESTALES (OpenMP)
-// =============================================================================
-
 #include <iostream>
 #include <vector>
 #include <random>
@@ -23,8 +19,8 @@ enum Estado {
 int main(int argc, char* argv[]) {
 
     // ===================== VALIDAR ARGUMENTOS =====================
-    if (argc < 13) {
-        cerr << "Uso: openmp.exe filas columnas simulaciones T_MAX probBase inicio_x inicio_y viento vegetacion humedad temperatura pendiente" << endl;
+    if (argc < 14) {
+        cerr << "Uso: openmp.exe filas columnas simulaciones T_MAX probBase inicio_x inicio_y viento vegetacion humedad temperatura pendiente viento_dir" << endl;
         return 1;
     }
 
@@ -40,6 +36,7 @@ int main(int argc, char* argv[]) {
     double f_humedad = atof(argv[10]);
     double f_temperatura = atof(argv[11]);
     double f_pendiente = atof(argv[12]);
+    int viento_dir = atoi(argv[13]);  // 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
 
     // Validar que el punto de inicio esté dentro del rango
     if (inicio_x < 0 || inicio_x >= filas || inicio_y < 0 || inicio_y >= columnas) {
@@ -48,6 +45,29 @@ int main(int argc, char* argv[]) {
     }
 
     omp_set_num_threads(NUM_HILOS);
+
+    // ===================== PRECALCULAR PROBABILIDADES POR DIRECCIÓN =====================
+    // Direcciones: 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
+    double probPorDir[8];
+    double factorBase = f_vegetacion * f_humedad * f_temperatura * f_pendiente;
+    
+    for (int d = 0; d < 8; d++) {
+        int diff = abs(viento_dir - d);
+        if (diff > 4) diff = 8 - diff;  // distancia angular mínima
+        
+        double factorViento;
+        switch (diff) {
+            case 0: factorViento = f_viento * 1.3; break;  // a favor del viento
+            case 1: factorViento = f_viento * 1.1; break;  // casi a favor
+            case 2: factorViento = f_viento * 1.0; break;  // perpendicular
+            case 3: factorViento = f_viento * 0.9; break;  // casi en contra
+            case 4: factorViento = f_viento * 0.7; break;  // en contra del viento
+            default: factorViento = f_viento;
+        }
+        
+        probPorDir[d] = probBase * factorBase * factorViento;
+        if (probPorDir[d] > 1.0) probPorDir[d] = 1.0;
+    }
 
     // ===================== INICIALIZAR CONTADOR =====================
     vector<vector<int>> contador(filas, vector<int>(columnas, 0));
@@ -75,9 +95,6 @@ int main(int argc, char* argv[]) {
             // Punto de inicio fijo del fuego (definido por el usuario)
             estado[inicio_x][inicio_y] = FUEGO;
 
-            // Factor global basado en parámetros del usuario
-            double factorGlobal = f_viento * f_vegetacion * f_humedad * f_temperatura * f_pendiente;
-
             // Propagación temporal
             for (int t = 0; t < T_MAX; t++) {
 
@@ -90,29 +107,26 @@ int main(int argc, char* argv[]) {
 
                             nuevoEstado[i][j] = QUEMADO;
 
-                            // Intentar propagar a 8 vecinos (Moore)
-                            auto intentar = [&](int ni, int nj) {
+                            // Intentar propagar a 8 vecinos (Moore) con probabilidad direccional
+                            auto intentar = [&](int ni, int nj, int dir) {
                                 if (ni >= 0 && ni < filas &&
                                     nj >= 0 && nj < columnas &&
                                     estado[ni][nj] == SANO) {
 
-                                    double p = probBase * factorGlobal;
-                                    if (p > 1.0) p = 1.0;
-
-                                    if (dist01(gen) < p)
+                                    if (dist01(gen) < probPorDir[dir])
                                         nuevoEstado[ni][nj] = FUEGO;
                                 }
                             };
 
-                            // Vecindad de Moore (8 vecinos)
-                            intentar(i - 1, j);      // arriba
-                            intentar(i + 1, j);      // abajo
-                            intentar(i, j - 1);      // izquierda
-                            intentar(i, j + 1);      // derecha
-                            intentar(i - 1, j - 1);  // diagonal superior izquierda
-                            intentar(i - 1, j + 1);  // diagonal superior derecha
-                            intentar(i + 1, j - 1);  // diagonal inferior izquierda
-                            intentar(i + 1, j + 1);  // diagonal inferior derecha
+                            // Vecindad de Moore (8 vecinos) - dir indica hacia dónde se propaga
+                            intentar(i - 1, j,     0);  // hacia N
+                            intentar(i - 1, j + 1, 1);  // hacia NE
+                            intentar(i,     j + 1, 2);  // hacia E
+                            intentar(i + 1, j + 1, 3);  // hacia SE
+                            intentar(i + 1, j,     4);  // hacia S
+                            intentar(i + 1, j - 1, 5);  // hacia SW
+                            intentar(i,     j - 1, 6);  // hacia W
+                            intentar(i - 1, j - 1, 7);  // hacia NW
                         }
                     }
                 }

@@ -29,7 +29,12 @@ inicio_y = st.sidebar.number_input("Columna de inicio (Y)", 0, int(columnas - 1)
 st.sidebar.header("Factores ambientales")
 st.sidebar.caption("1.0 = neutral | < 1.0 reduce propagación | > 1.0 acelera")
 
-f_viento = st.sidebar.slider("Factor Viento", 0.85, 1.15, 1.0, 0.01)
+dir_viento_opciones = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+dir_viento_label = st.sidebar.selectbox("Dirección del viento", dir_viento_opciones, index=4, 
+    help="Dirección hacia donde sopla el viento. El fuego se propaga más fácil en esa dirección.")
+viento_dir = dir_viento_opciones.index(dir_viento_label)
+
+f_viento = st.sidebar.slider("Intensidad del Viento", 0.85, 1.15, 1.0, 0.01)
 f_vegetacion = st.sidebar.slider("Factor Vegetación", 0.85, 1.15, 1.0, 0.01)
 f_humedad_slider = st.sidebar.slider("Humedad ambiental", 0.85, 1.15, 1.0, 0.01,
     help="Mayor valor = más humedad = menor propagación")
@@ -92,7 +97,7 @@ def ejecutar_simulacion():
         if not os.path.exists(exe):
             st.error(f"Ejecutable {metodo} no encontrado en {exe}")
             return None, None, None, None, None
-        comando = [exe, str(filas), str(columnas), str(simulaciones), str(tmax), str(prob), str(inicio_x), str(inicio_y), str(f_viento), str(f_vegetacion), str(f_humedad), str(f_temperatura), str(f_pendiente)]
+        comando = [exe, str(filas), str(columnas), str(simulaciones), str(tmax), str(prob), str(inicio_x), str(inicio_y), str(f_viento), str(f_vegetacion), str(f_humedad), str(f_temperatura), str(f_pendiente), str(viento_dir)]
     else:
         script = os.path.join(SIM_DIR, "mpi_python.py")
         if not os.path.exists(script):
@@ -171,7 +176,7 @@ if st.button("Ejecutar simulación"):
         st.subheader("Mapa de probabilidad de incendio")
         data = df_actual.values.astype(float)
         fig, ax = plt.subplots(figsize=(5, 4))
-        im = ax.imshow(data, cmap="inferno", origin="lower", aspect="auto", vmin=0, vmax=1)
+        im = ax.imshow(data, cmap="inferno", origin="upper", aspect="auto", vmin=0, vmax=1)
         cbar = fig.colorbar(im, ax=ax)
         cbar.set_label("Probabilidad de incendio")
         ax.set_title(f"Distribución espacial ({metodo})")
