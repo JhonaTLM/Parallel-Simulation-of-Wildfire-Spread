@@ -26,5 +26,6 @@ The system evaluates and compares the performance of sequential implementations 
 
 ### 2. Running the Application
 
-**`cd MonteCarloApp/interfaz
-streamlit run app.py`**
+**`cd MonteCarloApp/interfaz`**
+
+**`streamlit run app.py`**
