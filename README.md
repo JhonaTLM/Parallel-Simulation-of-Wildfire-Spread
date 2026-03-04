@@ -22,9 +22,13 @@ The system evaluates and compares the performance of sequential implementations 
 
 ### 1. Install Python Dependencies
 
-**`python -m pip install streamlit pandas matplotlib psutil`**
+```bash
+python -m pip install streamlit pandas matplotlib psutil
+```
 
 ### 2. Running the Application
 
-**`cd MonteCarloApp/interfaz`**
-**`streamlit run app.py`**
+```bash
+cd MonteCarloApp/interfaz
+streamlit run app.py
+```
